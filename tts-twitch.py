@@ -62,7 +62,7 @@ class TwitchTTSApp:
         self.volume_scale = tk.Scale(root, from_=0, to=100, orient="horizontal", variable=self.volume_var)
         self.volume_scale.grid(row=3, column=1, sticky="we")
 
-        tk.Label(root, text="Горячая клавиша для пропуска (например, f5):").grid(row=4, column=0, sticky="e")
+        tk.Label(root, text="Горячая клавиша для пропуска \n(например, f5):").grid(row=4, column=0, sticky="e")
         self.hotkey_var = tk.StringVar(value="f5")
         self.hotkey_entry = tk.Entry(root, textvariable=self.hotkey_var)
         self.hotkey_entry.grid(row=4, column=1, sticky="w")
