@@ -10,6 +10,8 @@ import os
 import tempfile
 import json
 import random
+import platform
+print(platform.architecture())
 
 # Фоновой asyncio-loop для edge-tts
 class AsyncioThread:
