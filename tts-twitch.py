@@ -178,15 +178,12 @@ class TwitchTTSApp:
                 self.status_label.config(text="Статус: отключено", fg="red")
 
             def on_pubmsg(conn, event):
-                if self.skip_flag:
-                    self.skip_flag = False
-                    return
                 msg = event.arguments[0]
-                print('сообщение: ', msg)
                 tags = getattr(event, 'tags', [])
                 has_cp = any(t.get('key') == 'custom-reward-id' and t.get('value') for t in tags)
                 if self.tts_mode.get() == 0 and not has_cp:
                     return
+
                 voice = self.voice_var.get()
                 if self.random_voice_var.get():
                     voice = random.choice(self.voices)
@@ -194,14 +191,15 @@ class TwitchTTSApp:
                 if lower.startswith("!м ") or lower.startswith("!m "):
                     v = [v for v in self.voices if "dmitry" in v.lower()]
                     if v: voice = random.choice(v)
-                    msg = msg[3:].trim()
+                    msg = msg[3:].strip()
                 elif lower.startswith("!ж ") or lower.startswith("!f "):
                     v = [v for v in self.voices if "svetlana" in v.lower()]
                     if v: voice = random.choice(v)
-                    msg = msg[3:].trim()
+                    msg = msg[3:].strip()
 
                 self.engine.setProperty('volume', self.volume_var.get() / 100.0)
                 future = self.asyncio_thread.run(speak_neural(msg, voice))
+
                 def done_callback(f):
                     path = f.result()
                     if path:
@@ -214,9 +212,9 @@ class TwitchTTSApp:
                             while ch.get_busy():
                                 if self.skip_flag:
                                     ch.stop()
-                                    self.skip_flag = False
                                     break
                                 time.sleep(0.1)
+                            self.skip_flag = False  # Сброс после завершения или пропуска
                         except Exception:
                             self.engine.say(msg)
                             self.engine.runAndWait()
@@ -225,6 +223,7 @@ class TwitchTTSApp:
                     else:
                         self.engine.say(msg)
                         self.engine.runAndWait()
+
                 future.add_done_callback(done_callback)
 
             self.connection.add_global_handler("welcome", on_connect)
