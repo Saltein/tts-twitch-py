@@ -5,13 +5,12 @@ import irc.client
 import pyttsx3
 import asyncio
 from edge_tts import Communicate
-from playsound import playsound
+import pygame
+import time
 import os
 import tempfile
 import json
 import random
-import platform
-print(platform.architecture())
 
 # Фоновой asyncio-loop для edge-tts
 class AsyncioThread:
@@ -30,8 +29,7 @@ async def speak_neural(text: str, voice: str = "ru-RU-DariyaNeural"):
         communicate = Communicate(text, voice)
         await communicate.save(tmp.name)
         return tmp.name
-    except Exception as e:
-        print("TTS Error:", e)
+    except Exception:
         return None
 
 class TwitchTTSApp:
@@ -39,7 +37,10 @@ class TwitchTTSApp:
         self.root = root
         self.root.title("Twitch TTS")
         self.engine = pyttsx3.init()
+        pygame.mixer.init()
         self.asyncio_thread = AsyncioThread()
+        self.skip_flag = False
+        self.current_hotkey = None
 
         # Интерфейс
         tk.Label(root, text="Username:").grid(row=0, column=0, sticky="e")
@@ -54,38 +55,74 @@ class TwitchTTSApp:
         self.token_entry = tk.Entry(root, show="*")
         self.token_entry.grid(row=2, column=1)
 
+        # Настройка громкости
+        tk.Label(root, text="Громкость (0–100):").grid(row=3, column=0, sticky="e")
+        self.volume_var = tk.IntVar(value=100)
+        self.volume_scale = tk.Scale(root, from_=0, to=100, orient="horizontal", variable=self.volume_var)
+        self.volume_scale.grid(row=3, column=1, sticky="we")
+
+        # Настройка горячей клавиши пропуска
+        tk.Label(root, text="Горячая клавиша для скипа (например, F5):").grid(row=4, column=0, sticky="e")
+        self.hotkey_var = tk.StringVar(value="F5")
+        self.hotkey_entry = tk.Entry(root, textvariable=self.hotkey_var)
+        self.hotkey_entry.grid(row=4, column=1, sticky="w")
+
         self.load_config()
+        # Установим громкость в движке pyttsx3
+        self.engine.setProperty('volume', self.volume_var.get() / 100.0)
+        # Привяжем горячую клавишу
+        self.current_hotkey = self.hotkey_var.get()
+        self.bind_hotkey(self.current_hotkey)
+        self.hotkey_var.trace_add('write', self.update_hotkey_binding)
 
         self.tts_mode = tk.IntVar(value=0)
-        tk.Label(root, text="Тип озвучивания:").grid(row=3, column=0, sticky="e")
+        tk.Label(root, text="Тип озвучивания:").grid(row=5, column=0, sticky="e")
         frame_mode = tk.Frame(root)
-        frame_mode.grid(row=3, column=1, sticky="w")
+        frame_mode.grid(row=5, column=1, sticky="w")
         tk.Radiobutton(frame_mode, text="Только за баллы канала", variable=self.tts_mode, value=0).pack(anchor="w")
         tk.Radiobutton(frame_mode, text="Все сообщения", variable=self.tts_mode, value=1).pack(anchor="w")
 
-        tk.Label(root, text="Голос TTS:").grid(row=4, column=0, sticky="e")
+        tk.Label(root, text="Голос TTS:").grid(row=6, column=0, sticky="e")
         self.voice_var = tk.StringVar(value="ru-RU-SvetlanaNeural")
         self.voices = [
             "ru-RU-SvetlanaNeural",
             "ru-RU-DmitryNeural",
         ]
         self.voice_combo = ttk.Combobox(root, textvariable=self.voice_var, values=self.voices, state="readonly")
-        self.voice_combo.grid(row=4, column=1)
+        self.voice_combo.grid(row=6, column=1)
 
         self.random_voice_var = tk.BooleanVar()
         self.random_voice_check = tk.Checkbutton(root, text="Рандомный голос", variable=self.random_voice_var)
-        self.random_voice_check.grid(row=5, column=1, sticky="w")
+        self.random_voice_check.grid(row=7, column=1, sticky="w")
 
         self.status_label = tk.Label(root, text="Статус: отключено", fg="red")
-        self.status_label.grid(row=6, columnspan=2, pady=10)
+        self.status_label.grid(row=8, columnspan=2, pady=10)
 
         self.connect_button = tk.Button(root, text="Подключиться", command=self.connect_to_twitch)
-        self.connect_button.grid(row=7, columnspan=2, pady=10)
+        self.connect_button.grid(row=9, columnspan=2, pady=10)
 
         self.client = None
         self.connection = None
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def bind_hotkey(self, hotkey):
+        try:
+            sequence = f"<{hotkey}>"
+            self.root.bind(sequence, self.on_skip)
+        except Exception:
+            pass
+
+    def update_hotkey_binding(self, *args):
+        new_hotkey = self.hotkey_var.get()
+        if self.current_hotkey:
+            self.root.unbind(f"<{self.current_hotkey}>")
+        self.current_hotkey = new_hotkey
+        self.bind_hotkey(new_hotkey)
+
+    def on_skip(self, event=None):
+        # Флаг для пропуска следующего сообщения
+        self.skip_flag = True
 
     def load_config(self):
         try:
@@ -93,7 +130,14 @@ class TwitchTTSApp:
                 data = json.load(f)
                 self.username_entry.insert(0, data.get("username", ""))
                 self.channel_entry.insert(0, data.get("channel", ""))
-                self.token_entry.insert(0, data.get("token", ""))
+                token = data.get("token", "")
+                if token.startswith('oauth:'):
+                    token = token.split('oauth:')[1]
+                self.token_entry.insert(0, token)
+                vol = data.get("volume", 100)
+                self.volume_var.set(vol)
+                hot = data.get("hotkey", "F5")
+                self.hotkey_var.set(hot)
         except FileNotFoundError:
             pass
 
@@ -101,7 +145,9 @@ class TwitchTTSApp:
         data = {
             "username": self.username_entry.get(),
             "channel": self.channel_entry.get(),
-            "token": self.token_entry.get()
+            "token": self.token_entry.get().strip(),
+            "volume": self.volume_var.get(),
+            "hotkey": self.hotkey_var.get()
         }
         with open("config.json", "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
@@ -137,6 +183,10 @@ class TwitchTTSApp:
                 self.status_label.config(text="Статус: отключено", fg="red")
 
             def on_pubmsg(conn, event):
+                # Проверяем флаг скипа
+                if self.skip_flag:
+                    self.skip_flag = False
+                    return
                 msg = event.arguments[0]
                 tags = getattr(event, 'tags', [])
                 has_cp = any(t.get('key') == 'custom-reward-id' and t.get('value') for t in tags)
@@ -163,25 +213,35 @@ class TwitchTTSApp:
                         voice = random.choice(female_voices)
                     msg = msg[3:].strip()
 
+                # Обновим громкость движка во время работы
+                self.engine.setProperty('volume', self.volume_var.get() / 100.0)
+
                 future = self.asyncio_thread.run(speak_neural(msg, voice))
                 def done_callback(f):
                     path = f.result()
                     if path:
-                        playsound(path)
-                        os.remove(path)
+                        try:
+                            sound = pygame.mixer.Sound(path)
+                            sound.set_volume(self.volume_var.get() / 100.0)
+                            ch = sound.play()
+                            while ch.get_busy():
+                                time.sleep(0.1)
+                        except Exception:
+                            self.engine.say(msg)
+                            self.engine.runAndWait()
+                        finally:
+                            os.remove(path)
                     else:
                         self.engine.say(msg)
                         self.engine.runAndWait()
                 future.add_done_callback(done_callback)
-                print(f"[TTS] {event.source.nick}: {original_msg} -> [{voice}] {msg}")
 
             self.connection.add_global_handler("welcome", on_connect)
             self.connection.add_global_handler("disconnect", on_disconnect)
             self.connection.add_global_handler("pubmsg", on_pubmsg)
 
             self.client.process_forever()
-        except Exception as e:
-            print("Ошибка подключения:", e)
+        except Exception:
             self.status_label.config(text="Статус: ошибка подключения", fg="red")
 
 if __name__ == "__main__":
